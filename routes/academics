@@ -1,0 +1,257 @@
+const express = require('express');
+const { query } = require('../config/db');
+const { authenticate, authorize } = require('../middleware/auth');
+
+const router = express.Router();
+router.use(authenticate);
+
+const getGrade = (average) => {
+  if (average >= 80) return { grade: 'A',  points: 12 };
+  if (average >= 75) return { grade: 'A-', points: 11 };
+  if (average >= 70) return { grade: 'B+', points: 10 };
+  if (average >= 65) return { grade: 'B',  points: 9  };
+  if (average >= 60) return { grade: 'B-', points: 8  };
+  if (average >= 55) return { grade: 'C+', points: 7  };
+  if (average >= 50) return { grade: 'C',  points: 6  };
+  if (average >= 45) return { grade: 'C-', points: 5  };
+  if (average >= 40) return { grade: 'D+', points: 4  };
+  if (average >= 35) return { grade: 'D',  points: 3  };
+  if (average >= 30) return { grade: 'D-', points: 2  };
+  return { grade: 'E', points: 1 };
+};
+
+router.get('/classes', async (req, res) => {
+  try {
+    const result = await query('SELECT * FROM classes ORDER BY name');
+    res.json({ success: true, data: result.rows });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+});
+
+router.get('/subjects', async (req, res) => {
+  try {
+    const result = await query('SELECT * FROM subjects ORDER BY name');
+    res.json({ success: true, data: result.rows });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+});
+
+router.get('/students-by-class/:class_id', async (req, res) => {
+  try {
+    const result = await query(
+      'SELECT id, name, adm_no FROM students WHERE class_id = $1 AND is_active = TRUE ORDER BY name',
+      [req.params.class_id]
+    );
+    res.json({ success: true, data: result.rows });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+});
+
+router.get('/class/:class_id', async (req, res) => {
+  try {
+    const { term, academic_year = '2024' } = req.query;
+    const { class_id } = req.params;
+
+    if (!term) {
+      return res.status(400).json({ success: false, message: 'term query param required.' });
+    }
+
+    const students = await query(
+      'SELECT s.id, s.name, s.adm_no, s.gender FROM students s WHERE s.class_id = $1 AND s.is_active = TRUE ORDER BY s.name',
+      [class_id]
+    );
+
+    const marks = await query(
+      'SELECT ar.student_id, ar.average, ar.grade, ar.points, sub.name AS subject_name, sub.code FROM academic_records ar JOIN subjects sub ON ar.subject_id = sub.id WHERE ar.class_id = $1 AND ar.term = $2 AND ar.academic_year = $3 ORDER BY ar.student_id, sub.name',
+      [class_id, term, academic_year]
+    );
+
+    const marksByStudent = {};
+    for (const m of marks.rows) {
+      if (!marksByStudent[m.student_id]) {
+        marksByStudent[m.student_id] = { subjects: [], totalPoints: 0 };
+      }
+      marksByStudent[m.student_id].subjects.push(m);
+      marksByStudent[m.student_id].totalPoints += m.points || 0;
+    }
+
+    const results = students.rows.map(s => {
+      const info = marksByStudent[s.id] || { subjects: [], totalPoints: 0 };
+      const avg = info.subjects.length
+        ? info.subjects.reduce((sum, m) => sum + parseFloat(m.average || 0), 0) / info.subjects.length
+        : 0;
+      return {
+        ...s,
+        subjects: info.subjects,
+        totalPoints: info.totalPoints,
+        overallAverage: Math.round(avg * 10) / 10,
+        meanGrade: getGrade(avg),
+      };
+    }).sort((a, b) => b.overallAverage - a.overallAverage);
+
+    results.forEach((r, i) => { r.rank = i + 1; });
+
+    res.json({ success: true, data: results, term, class_id });
+  } catch (err) {
+    console.error('Academics class error:', err);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+});
+
+router.get('/student/:student_id', async (req, res) => {
+  try {
+    const { academic_year } = req.query;
+
+    const conditions = ['ar.student_id = $1'];
+    const params = [req.params.student_id];
+    if (academic_year) {
+      conditions.push('ar.academic_year = $2');
+      params.push(academic_year);
+    }
+
+    const result = await query(
+      'SELECT ar.*, sub.name AS subject_name, sub.code, u.name AS entered_by_name FROM academic_records ar JOIN subjects sub ON ar.subject_id = sub.id LEFT JOIN users u ON ar.entered_by = u.id WHERE ' + conditions.join(' AND ') + ' ORDER BY ar.term, sub.name',
+      params
+    );
+
+    const byTerm = {};
+    for (const r of result.rows) {
+      if (!byTerm[r.term]) byTerm[r.term] = [];
+      byTerm[r.term].push(r);
+    }
+
+    const terms = Object.entries(byTerm).map(function(entry) {
+      const term = entry[0];
+      const subjects = entry[1];
+      const avg = subjects.reduce((s, r) => s + parseFloat(r.average || 0), 0) / subjects.length;
+      return {
+        term,
+        subjects,
+        termAverage: Math.round(avg * 10) / 10,
+        meanGrade: getGrade(avg),
+      };
+    });
+
+    res.json({ success: true, data: terms });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+});
+
+router.post('/marks', authorize('admin', 'principal', 'teacher'), async (req, res) => {
+  try {
+    const { records } = req.body;
+
+    if (!records || !Array.isArray(records) || records.length === 0) {
+      return res.status(400).json({ success: false, message: 'records array is required.' });
+    }
+
+    const inserted = [];
+    const errors = [];
+
+    for (const record of records) {
+      try {
+        const { student_id, subject_id, class_id, term, academic_year = '2024', cat1, cat2, exam } = record;
+
+        if (!student_id || !subject_id || !class_id || !term) {
+          errors.push({ record, error: 'Missing required fields.' });
+          continue;
+        }
+
+        const avg = ((parseFloat(cat1 || 0) + parseFloat(cat2 || 0) + parseFloat(exam || 0)) / 3);
+        const { grade, points } = getGrade(avg);
+
+        const result = await query(
+          'INSERT INTO academic_records (student_id, subject_id, class_id, term, academic_year, cat1, cat2, exam, grade, points, entered_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (student_id, subject_id, term, academic_year) DO UPDATE SET cat1 = EXCLUDED.cat1, cat2 = EXCLUDED.cat2, exam = EXCLUDED.exam, grade = EXCLUDED.grade, points = EXCLUDED.points, entered_by = EXCLUDED.entered_by, updated_at = NOW() RETURNING id, student_id, subject_id, term, cat1, cat2, exam, average, grade',
+          [student_id, subject_id, class_id, term, academic_year, cat1, cat2, exam, grade, points, req.user.id]
+        );
+        inserted.push(result.rows[0]);
+      } catch (e) {
+        errors.push({ record, error: e.message });
+      }
+    }
+
+    res.json({
+      success: true,
+      message: inserted.length + ' record(s) saved. ' + errors.length + ' error(s).',
+      data: { inserted, errors },
+    });
+  } catch (err) {
+    console.error('Marks entry error:', err);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+});
+
+router.get('/report-card/:student_id', async (req, res) => {
+  try {
+    const { term, academic_year = '2024' } = req.query;
+
+    if (!term) {
+      return res.status(400).json({ success: false, message: 'term is required.' });
+    }
+
+    const studentResult = await query(
+      'SELECT s.*, c.name AS class_name FROM students s LEFT JOIN classes c ON s.class_id = c.id WHERE s.id = $1',
+      [req.params.student_id]
+    );
+
+    if (studentResult.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Student not found.' });
+    }
+
+    const student = studentResult.rows[0];
+
+    const marksResult = await query(
+      'SELECT ar.cat1, ar.cat2, ar.exam, ar.average, ar.grade, ar.points, sub.name AS subject_name, sub.code, sub.is_compulsory FROM academic_records ar JOIN subjects sub ON ar.subject_id = sub.id WHERE ar.student_id = $1 AND ar.term = $2 AND ar.academic_year = $3 ORDER BY sub.name',
+      [student.id, term, academic_year]
+    );
+
+    const rankResult = await query(
+      'SELECT COUNT(*) + 1 AS rank FROM (SELECT ar2.student_id, AVG(ar2.average) AS avg_score FROM academic_records ar2 WHERE ar2.class_id = $1 AND ar2.term = $2 AND ar2.academic_year = $3 GROUP BY ar2.student_id) sub_query WHERE sub_query.avg_score > (SELECT AVG(average) FROM academic_records WHERE student_id = $4 AND term = $2 AND academic_year = $3)',
+      [student.class_id, term, academic_year, student.id]
+    );
+
+    const classSizeResult = await query(
+      'SELECT COUNT(*) FROM students WHERE class_id = $1 AND is_active = TRUE',
+      [student.class_id]
+    );
+
+    const subjects = marksResult.rows;
+    const totalPoints = subjects.reduce((s, r) => s + (r.points || 0), 0);
+    const avgScore = subjects.length
+      ? subjects.reduce((s, r) => s + parseFloat(r.average || 0), 0) / subjects.length
+      : 0;
+
+    res.json({
+      success: true,
+      data: {
+        student,
+        term,
+        academic_year,
+        subjects,
+        summary: {
+          totalPoints,
+          overallAverage: Math.round(avgScore * 10) / 10,
+          meanGrade: getGrade(avgScore),
+          rank: rankResult.rows[0] ? rankResult.rows[0].rank : '-',
+          classSize: classSizeResult.rows[0] ? classSizeResult.rows[0].count : '-',
+        },
+        school: {
+          name: process.env.SCHOOL_NAME,
+          motto: process.env.SCHOOL_MOTTO,
+          phone: process.env.SCHOOL_PHONE,
+          email: process.env.SCHOOL_EMAIL,
+          address: process.env.SCHOOL_ADDRESS,
+        },
+      },
+    });
+  } catch (err) {
+    console.error('Report card error:', err);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+});
+
+module.exports = router;
