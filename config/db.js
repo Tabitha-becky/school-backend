@@ -1,21 +1,21 @@
-// ─────────────────────────────────────────────────────────────
-//  db.js — PostgreSQL Connection Pool
-//  Uses the 'pg' library with connection pooling for performance
-// ─────────────────────────────────────────────────────────────
 const { Pool } = require('pg');
 require('dotenv').config();
 
-const pool = new Pool({
-  user: 'postgres',
-  password: 'postgres123',
-  host: '127.0.0.1',
-  port: 5432,
-  database: 'edutrack',
-  ssl: false,
-  max: 10,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 5000,
-});
+const pool = new Pool(
+  process.env.DB_URL
+    ? {
+        connectionString: process.env.DB_URL,
+        ssl: { rejectUnauthorized: false }
+      }
+    : {
+        user: 'postgres',
+        password: 'postgres123',
+        host: '127.0.0.1',
+        port: 5432,
+        database: 'edutrack',
+        ssl: false,
+      }
+);
 
 pool.connect((err, client, release) => {
   if (err) {
