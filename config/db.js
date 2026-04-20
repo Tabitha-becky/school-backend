@@ -1,21 +1,15 @@
 const { Pool } = require('pg');
 require('dotenv').config();
 
+const connString = process.env.DB_URL || process.env.DATABASE_URL;
+
+console.log('DB connection string exists:', !!connString);
+
 const pool = new Pool(
-  process.env.DB_URL
-    ? {
-        connectionString: process.env.DB_URL,
-        ssl: { rejectUnauthorized: false }
-      }
-    : {
-        user: 'postgres',
-        password: 'postgres123',
-        host: '127.0.0.1',
-        port: 5432,
-        database: 'edutrack',
-        ssl: false,
-      }
-);
+  connString
+    ? { connectionString: connString, ssl: { rejectUnauthorized: false } }
+    : { user: 'postgres', password: 'postgres123', host: '127.0.0.1', port: 5432, database: 'edutrack', ssl: false }
+);;
 
 pool.connect((err, client, release) => {
   if (err) {
