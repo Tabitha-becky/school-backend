@@ -56,7 +56,7 @@ router.post('/login', async (req, res) => {
     const user = result.rows[0];
 
     // Safety check
-    if (!user.password) {
+    if (!user.password_hash) {
       return res.status(500).json({
         success: false,
         message: 'User password missing in database.'
@@ -64,7 +64,7 @@ router.post('/login', async (req, res) => {
     }
 
     // Compare password
-    const passwordMatch = await bcrypt.compare(password, user.password);
+    const passwordMatch = await bcrypt.compare(password, user.password_hash);
 
     if (!passwordMatch) {
       return res.status(401).json({
