@@ -363,4 +363,64 @@ router.delete('/structure/:id', authorize('admin', 'principal'), async (req, res
     res.status(500).json({ success: false, message: 'Server error.' });
   }
 });
+// POST /api/fees/generate — Auto-generate fee records from fee structure
+router.post('/generate', authorize('admin', 'principal'), async (req, res) => {
+  try {
+    const { term, academic_year = '2024' } = req.body;
+    if (!term) return res.status(400).json({ success: false, message: 'Term is required.' });
+
+    // Get all fee structures for this term
+    const structures = await query(
+      'SELECT * FROM fee_structures WHERE term = $1 AND academic_year = $2',
+      [term, academic_year]
+    );
+
+    if (structures.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'No fee structures found for this term. Please set up fee structures first.' });
+    }
+
+    let created = 0;
+    let skipped = 0;
+
+    for (const structure of structures.rows) {
+      // Get all active students in this class
+      const students = await query(
+        'SELECT id FROM students WHERE class_id = $1 AND is_active = TRUE',
+        [structure.class_id]
+      );
+
+      for (const student of students.rows) {
+        // Check if fee record already exists
+        const existing = await query(
+          'SELECT id FROM fee_payments WHERE student_id = $1 AND term = $2 AND academic_year = $3',
+          [student.id, term, academic_year]
+        );
+
+        if (existing.rows.length > 0) {
+          skipped++;
+          continue;
+        }
+
+        // Generate receipt number
+        const receiptNo = `RCP-${academic_year.slice(-2)}${String(new Date().getMonth() + 1).padStart(2,'0')}-${Math.floor(Math.random() * 9000) + 1000}`;
+
+        await query(
+          `INSERT INTO fee_payments (student_id, term, academic_year, amount_paid, amount_expected, payment_method, balance_before, balance_after, receipt_no, received_by)
+           VALUES ($1,$2,$3,0,$4,'Pending',0,$4,$5,$6)`,
+          [student.id, term, academic_year, structure.total_amount, receiptNo, req.user.id]
+        );
+        created++;
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Fee records generated! ${created} created, ${skipped} already existed.`,
+      data: { created, skipped }
+    });
+  } catch (err) {
+    console.error('Generate fees error:', err);
+    res.status(500).json({ success: false, message: 'Failed to generate fee records: ' + err.message });
+  }
+});
 module.exports = router;
