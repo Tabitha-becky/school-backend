@@ -141,7 +141,24 @@ router.post('/', authorize('admin', 'principal', 'bursar'), async (req, res) => 
     );
 
     const student = studentResult.rows[0];
-
+// Auto-generate fee records from fee structure
+    try {
+      const feeStructures = await client.query(
+        'SELECT * FROM fee_structures WHERE class_id = $1',
+        [class_id]
+      );
+      for (const structure of feeStructures.rows) {
+        const receiptNo = `RCP-${new Date().getFullYear().toString().slice(-2)}${String(new Date().getMonth() + 1).padStart(2,'0')}-${Math.floor(Math.random() * 9000) + 1000}`;
+        await client.query(
+          `INSERT INTO fee_payments (student_id, term, academic_year, amount_paid, amount_expected, payment_method, balance_before, balance_after, receipt_no, received_by)
+           VALUES ($1,$2,$3,0,$4,'Pending',0,$4,$5,$6)
+           ON CONFLICT DO NOTHING`,
+          [student.id, structure.term, structure.academic_year, structure.total_amount, receiptNo, req.user.id]
+        );
+      }
+    } catch (feeErr) {
+      console.log('Fee auto-generate skipped:', feeErr.message);
+    }
     // Insert basic health record
     try {
       await client.query(
