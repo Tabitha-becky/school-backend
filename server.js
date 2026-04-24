@@ -11,6 +11,8 @@ const academicRoutes   = require('./routes/academics');
 const healthRoutes     = require('./routes/health');
 const reportRoutes     = require('./routes/reports');
 const attendanceRoutes = require('./routes/attendance');
+const settingsRoutes = require('./routes/settings');
+
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -77,6 +79,7 @@ app.use('/api/academics',  academicRoutes);
 app.use('/api/health',     healthRoutes);
 app.use('/api/reports',    reportRoutes);
 app.use('/api/attendance', attendanceRoutes);
+app.use('/api/settings', settingsRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ success: false, message: `Route ${req.method} ${req.path} not found.` });
