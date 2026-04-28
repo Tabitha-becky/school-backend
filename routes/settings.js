@@ -5,11 +5,12 @@ const { authenticate, authorize } = require('../middleware/auth');
 const router = express.Router();
 router.use(authenticate);
 
-// GET current term
+// GET current term — auto detects based on today's date
 router.get('/current-term', async (req, res) => {
   try {
     const today = new Date().toISOString().split('T')[0];
 
+    // Find term whose dates contain today
     const result = await query(
       `SELECT * FROM school_settings 
        WHERE term_start_date <= $1 AND term_end_date >= $1
@@ -21,6 +22,7 @@ router.get('/current-term', async (req, res) => {
       return res.json({ success: true, data: result.rows[0] });
     }
 
+    // Fallback: get manually set current term
     const fallback = await query(
       'SELECT * FROM school_settings WHERE is_current = TRUE ORDER BY created_at DESC LIMIT 1'
     );
@@ -29,7 +31,7 @@ router.get('/current-term', async (req, res) => {
       return res.json({ success: true, data: fallback.rows[0] });
     }
 
-    // Derive from current date
+    // Last resort: derive from current month
     const year = new Date().getFullYear();
     const month = new Date().getMonth() + 1;
     let term;
@@ -39,6 +41,7 @@ router.get('/current-term', async (req, res) => {
 
     res.json({ success: true, data: { academic_year: String(year), term, term_start_date: null, term_end_date: null, has_half_term: false } });
   } catch (err) {
+    console.error('Current term error:', err.message);
     res.status(500).json({ success: false, message: 'Server error.' });
   }
 });
@@ -53,32 +56,39 @@ router.get('/terms', async (req, res) => {
   }
 });
 
-// POST save a term
+// POST create a term
 router.post('/terms', authorize('admin', 'principal'), async (req, res) => {
   try {
     const { academic_year, term, term_start_date, term_end_date, half_term_start, half_term_end, has_half_term, is_current } = req.body;
+
     if (!academic_year || !term || !term_start_date || !term_end_date) {
       return res.status(400).json({ success: false, message: 'Academic year, term name, start and end dates are required.' });
     }
+
     if (is_current) {
       await query('UPDATE school_settings SET is_current = FALSE');
     }
+
     const result = await query(
       `INSERT INTO school_settings (academic_year, term, term_start_date, term_end_date, half_term_start, half_term_end, has_half_term, is_current)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-      [academic_year, term, term_start_date, term_end_date,
-       has_half_term ? half_term_start : null,
-       has_half_term ? half_term_end : null,
-       has_half_term || false, is_current || false]
+      [
+        academic_year, term, term_start_date, term_end_date,
+        has_half_term ? half_term_start : null,
+        has_half_term ? half_term_end : null,
+        has_half_term || false,
+        is_current || false
+      ]
     );
+
     res.json({ success: true, message: 'Term saved.', data: result.rows[0] });
   } catch (err) {
-    console.error(err);
+    console.error('Save term error:', err.message);
     res.status(500).json({ success: false, message: 'Server error.' });
   }
 });
 
-// PUT set current term
+// PUT set a term as current
 router.put('/terms/:id/set-current', authorize('admin', 'principal'), async (req, res) => {
   try {
     await query('UPDATE school_settings SET is_current = FALSE');

@@ -11,15 +11,12 @@ const academicRoutes   = require('./routes/academics');
 const healthRoutes     = require('./routes/health');
 const reportRoutes     = require('./routes/reports');
 const attendanceRoutes = require('./routes/attendance');
-const settingsRoutes = require('./routes/settings');
-
+const settingsRoutes   = require('./routes/settings');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Trust proxy — required for Railway
 app.set('trust proxy', 1);
-
 app.use(helmet());
 
 const allowedOrigins = [
@@ -28,31 +25,25 @@ const allowedOrigins = [
   'https://school-frontend-lilac-omega.vercel.app'
 ];
 
-const corsOptions = {
+app.use(cors({
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);
     if (allowedOrigins.includes(origin)) return callback(null, true);
-    console.log("❌ Blocked by CORS:", origin);
     return callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
-};
-
-app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
+}));
+app.options('*', cors());
 
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 200,
+  windowMs: 15 * 60 * 1000, max: 200,
   message: { success: false, message: 'Too many requests.' },
   validate: { xForwardedForHeader: false }
 });
-
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10,
+  windowMs: 15 * 60 * 1000, max: 20,
   message: { success: false, message: 'Too many login attempts.' },
   validate: { xForwardedForHeader: false }
 });
@@ -68,7 +59,7 @@ app.get('/', (req, res) => {
     version: '1.0.0',
     school: process.env.SCHOOL_NAME,
     status: 'running',
-    db: process.env.DB_URL ? 'configured' : 'missing'
+    db: process.env.DB_URL || process.env.DATABASE_URL ? 'Railway ✓' : 'LOCAL'
   });
 });
 
@@ -79,14 +70,14 @@ app.use('/api/academics',  academicRoutes);
 app.use('/api/health',     healthRoutes);
 app.use('/api/reports',    reportRoutes);
 app.use('/api/attendance', attendanceRoutes);
-app.use('/api/settings', settingsRoutes);
+app.use('/api/settings',   settingsRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ success: false, message: `Route ${req.method} ${req.path} not found.` });
 });
 
 app.use((err, req, res, next) => {
-  console.error('❌ Error:', err.message);
+  console.error('Error:', err.message);
   res.status(500).json({
     success: false,
     message: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error.'
@@ -99,7 +90,6 @@ app.listen(PORT, () => {
   console.log(`  🚀  Running on: http://localhost:${PORT}`);
   console.log(`  🌍  Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`  🏛️   School: ${process.env.SCHOOL_NAME}`);
-  console.log(`  🗄️   DB: ${process.env.DB_URL ? 'Railway ✓' : 'LOCAL'}`);
   console.log('════════════════════════════════════════════\n');
 });
 
