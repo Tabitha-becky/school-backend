@@ -72,6 +72,9 @@ app.use('/api/reports',    reportRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/settings',   settingsRoutes);
 
+const importRoutes = require('./routes/import');
+app.use('/api/import', importRoutes);
+
 app.use((req, res) => {
   res.status(404).json({ success: false, message: `Route ${req.method} ${req.path} not found.` });
 });
