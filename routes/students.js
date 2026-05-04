@@ -87,7 +87,7 @@ router.get('/:id', async (req, res) => {
       query('SELECT * FROM health_records WHERE student_id = $1', [student.id]),
       query('SELECT fp.*, u.name AS received_by_name FROM fee_payments fp LEFT JOIN users u ON fp.received_by = u.id WHERE fp.student_id = $1 ORDER BY fp.payment_date DESC', [student.id]),
       query('SELECT ar.*, s.name AS subject_name FROM academic_records ar JOIN subjects s ON ar.subject_id = s.id WHERE ar.student_id = $1 ORDER BY ar.term, s.name', [student.id]),
-      query('SELECT COUNT(*) FILTER (WHERE status = \'present\') AS present, COUNT(*) FILTER (WHERE status = \'absent\') AS absent, COUNT(*) FILTER (WHERE status = \'late\') AS late, COUNT(*) AS total FROM attendance WHERE student_id = $1', [student.id]),
+      query("SELECT COUNT(*) FILTER (WHERE status = 'present') AS present, COUNT(*) FILTER (WHERE status = 'absent') AS absent, COUNT(*) FILTER (WHERE status = 'late') AS late, COUNT(*) AS total FROM attendance WHERE student_id = $1", [student.id]),
     ]);
 
     res.json({
@@ -141,24 +141,36 @@ router.post('/', authorize('admin', 'principal', 'bursar'), async (req, res) => 
     );
 
     const student = studentResult.rows[0];
-// Auto-generate fee records from fee structure
+
+    // Auto-generate fee record for CURRENT TERM ONLY
     try {
-      const feeStructures = await client.query(
-        'SELECT * FROM fee_structures WHERE class_id = $1',
-        [class_id]
+      const currentTermRes = await client.query(
+        `SELECT * FROM school_settings 
+         WHERE term_start_date <= CURRENT_DATE AND term_end_date >= CURRENT_DATE 
+         ORDER BY term_start_date DESC LIMIT 1`
       );
-      for (const structure of feeStructures.rows) {
-        const receiptNo = `RCP-${new Date().getFullYear().toString().slice(-2)}${String(new Date().getMonth() + 1).padStart(2,'0')}-${Math.floor(Math.random() * 9000) + 1000}`;
-        await client.query(
-          `INSERT INTO fee_payments (student_id, term, academic_year, amount_paid, amount_expected, payment_method, balance_before, balance_after, receipt_no, received_by)
-           VALUES ($1,$2,$3,0,$4,'Pending',0,$4,$5,$6)
-           ON CONFLICT DO NOTHING`,
-          [student.id, structure.term, structure.academic_year, structure.total_amount, receiptNo, req.user.id]
+      const currentTerm = currentTermRes.rows[0];
+
+      if (currentTerm && class_id) {
+        const feeStructure = await client.query(
+          'SELECT * FROM fee_structures WHERE class_id = $1 AND term = $2 AND academic_year = $3 LIMIT 1',
+          [class_id, currentTerm.term, currentTerm.academic_year]
         );
+        if (feeStructure.rows.length > 0) {
+          const structure = feeStructure.rows[0];
+          const receiptNo = `RCP-${new Date().getFullYear().toString().slice(-2)}${String(new Date().getMonth() + 1).padStart(2,'0')}-${Math.floor(Math.random() * 9000) + 1000}`;
+          await client.query(
+            `INSERT INTO fee_payments (student_id, term, academic_year, amount_paid, amount_expected, payment_method, balance_before, balance_after, receipt_no, received_by)
+             VALUES ($1,$2,$3,0,$4,'Pending',0,$4,$5,$6)
+             ON CONFLICT DO NOTHING`,
+            [student.id, structure.term, structure.academic_year, structure.total_amount, receiptNo, req.user.id]
+          );
+        }
       }
     } catch (feeErr) {
       console.log('Fee auto-generate skipped:', feeErr.message);
     }
+
     // Insert basic health record
     try {
       await client.query(
@@ -238,7 +250,7 @@ router.get('/class/:class_id', async (req, res) => {
 router.get('/export/excel', async (req, res) => {
   try {
     const ExcelJS = require('exceljs');
-    const { class_id, academic_year = '2024' } = req.query;
+    const { class_id, academic_year = String(new Date().getFullYear()) } = req.query;
     let sql = `SELECT s.adm_no, s.name, s.gender, s.date_of_birth, c.name AS class_name,
                       s.parent_name, s.parent_phone, s.parent_email, s.address, s.county, s.year_joined,
                       hr.blood_group, hr.allergies, hr.chronic_conditions, hr.current_medication, hr.emergency_contact_phone,
