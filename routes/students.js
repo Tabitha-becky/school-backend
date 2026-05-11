@@ -112,14 +112,26 @@ router.post('/', authorize('admin', 'principal', 'bursar'), async (req, res) => 
   try {
     await client.query('BEGIN');
 
-    const {
-      adm_no, name, class_id, gender, date_of_birth,
-      parent_name, parent_phone, parent_email,
-      address, county, year_joined,
-      blood_group = 'Unknown', allergies = 'None',
-      chronic_conditions = 'None', current_medication = 'None',
-      emergency_contact_phone,
-    } = req.body;
+ const {
+  adm_no,
+  name,
+  class_id,
+  gender,
+  date_of_birth,
+  parent_name,
+  parent_phone,
+  parent_email,
+  address,
+  county,
+  year_joined,
+  joining_term = 1,
+
+  blood_group = 'Unknown',
+  allergies = 'None',
+  chronic_conditions = 'None',
+  current_medication = 'None',
+  emergency_contact_phone,
+} = req.body;
 
     if (!adm_no || !name || !parent_phone) {
       await client.query('ROLLBACK');
@@ -139,37 +151,103 @@ router.post('/', authorize('admin', 'principal', 'bursar'), async (req, res) => 
        parent_name || null, parent_phone, parent_email || null,
        address || null, county || null, year_joined || new Date().getFullYear()]
     );
+try {
 
+  const currentTermRes = await client.query(
+    `SELECT *
+     FROM school_settings
+     WHERE term_start_date <= CURRENT_DATE
+     AND term_end_date >= CURRENT_DATE
+     ORDER BY term_start_date DESC
+     LIMIT 1`
+  );
+
+  const currentTerm = currentTermRes.rows[0];
+
+  if (currentTerm && class_id) {
+
+    // 🚨 IMPORTANT: only charge from joining term onward
+    if (currentTerm.term < joining_term) {
+      return;
+    }
+
+    // prevent duplicate fee creation for same term
+    const existingFee = await client.query(
+      `SELECT id FROM fee_payments
+       WHERE student_id = $1
+       AND term = $2
+       AND academic_year = $3`,
+      [student.id, currentTerm.term, currentTerm.academic_year]
+    );
+
+    if (existingFee.rows.length > 0) {
+      return;
+    }
+
+    const feeStructure = await client.query(
+      `SELECT *
+       FROM fee_structures
+       WHERE class_id = $1
+       AND term = $2
+       AND academic_year = $3
+       LIMIT 1`,
+      [class_id, currentTerm.term, currentTerm.academic_year]
+    );
+
+    if (feeStructure.rows.length > 0) {
+
+      const structure = feeStructure.rows[0];
+
+      // 🔥 ARREARS FIX (only unpaid balances)
+      const arrearsResult = await client.query(
+        `SELECT COALESCE(SUM(balance_after), 0) AS arrears
+         FROM fee_payments
+         WHERE student_id = $1
+         AND balance_after > 0`,
+        [student.id]
+      );
+
+      const previousArrears = parseFloat(arrearsResult.rows[0].arrears || 0);
+
+      const termFee = parseFloat(structure.total_amount || 0);
+      const totalExpected = termFee + previousArrears;
+
+      const receiptNo = `RCP-${new Date().getFullYear().toString().slice(-2)}${String(new Date().getMonth() + 1).padStart(2,'0')}-${Math.floor(Math.random() * 9000) + 1000}`;
+
+      await client.query(
+        `INSERT INTO fee_payments (
+            student_id,
+            term,
+            academic_year,
+            amount_paid,
+            amount_expected,
+            payment_method,
+            balance_before,
+            balance_after,
+            receipt_no,
+            received_by
+         )
+         VALUES ($1,$2,$3,0,$4,'Pending',$5,$6,$7,$8)`,
+        [
+          student.id,
+          currentTerm.term,
+          currentTerm.academic_year,
+          totalExpected,
+          previousArrears,
+          totalExpected,
+          receiptNo,
+          req.user.id
+        ]
+      );
+    }
+  }
+
+} catch (feeErr) {
+  console.log('Fee auto-generate skipped:', feeErr.message);
+}
     const student = studentResult.rows[0];
 
-    // Auto-generate fee record for CURRENT TERM ONLY
-    try {
-      const currentTermRes = await client.query(
-        `SELECT * FROM school_settings 
-         WHERE term_start_date <= CURRENT_DATE AND term_end_date >= CURRENT_DATE 
-         ORDER BY term_start_date DESC LIMIT 1`
-      );
-      const currentTerm = currentTermRes.rows[0];
-
-      if (currentTerm && class_id) {
-        const feeStructure = await client.query(
-          'SELECT * FROM fee_structures WHERE class_id = $1 AND term = $2 AND academic_year = $3 LIMIT 1',
-          [class_id, currentTerm.term, currentTerm.academic_year]
-        );
-        if (feeStructure.rows.length > 0) {
-          const structure = feeStructure.rows[0];
-          const receiptNo = `RCP-${new Date().getFullYear().toString().slice(-2)}${String(new Date().getMonth() + 1).padStart(2,'0')}-${Math.floor(Math.random() * 9000) + 1000}`;
-          await client.query(
-            `INSERT INTO fee_payments (student_id, term, academic_year, amount_paid, amount_expected, payment_method, balance_before, balance_after, receipt_no, received_by)
-             VALUES ($1,$2,$3,0,$4,'Pending',0,$4,$5,$6)
-             ON CONFLICT DO NOTHING`,
-            [student.id, structure.term, structure.academic_year, structure.total_amount, receiptNo, req.user.id]
-          );
-        }
-      }
-    } catch (feeErr) {
-      console.log('Fee auto-generate skipped:', feeErr.message);
-    }
+   
 
     // Insert basic health record
     try {
