@@ -201,21 +201,97 @@ router.post('/', authorize('admin', 'principal', 'bursar'), async (req, res) => 
 // PUT update student
 router.put('/:id', authorize('admin', 'principal'), async (req, res) => {
   try {
-    const { name, class_id, gender, date_of_birth, parent_name, parent_phone, parent_email, address, county } = req.body;
+
+    const {
+      name,
+      class_id,
+      gender,
+      date_of_birth,
+      parent_name,
+      parent_phone,
+      parent_email,
+      address,
+      county,
+
+      // HEALTH DETAILS
+      blood_group,
+      allergies,
+      chronic_conditions,
+      current_medication,
+      emergency_contact_phone
+
+    } = req.body;
+
+    // UPDATE STUDENT DETAILS
     const result = await query(
       `UPDATE students SET
-         name = COALESCE($1, name), class_id = COALESCE($2, class_id),
-         gender = COALESCE($3, gender), date_of_birth = COALESCE($4, date_of_birth),
-         parent_name = COALESCE($5, parent_name), parent_phone = COALESCE($6, parent_phone),
-         parent_email = COALESCE($7, parent_email), address = COALESCE($8, address),
-         county = COALESCE($9, county)
-       WHERE id = $10 RETURNING id, name, adm_no`,
-      [name, class_id, gender, date_of_birth || null, parent_name, parent_phone, parent_email, address, county, req.params.id]
+        name = COALESCE($1, name),
+        class_id = COALESCE($2, class_id),
+        gender = COALESCE($3, gender),
+        date_of_birth = COALESCE($4, date_of_birth),
+        parent_name = COALESCE($5, parent_name),
+        parent_phone = COALESCE($6, parent_phone),
+        parent_email = COALESCE($7, parent_email),
+        address = COALESCE($8, address),
+        county = COALESCE($9, county)
+      WHERE id = $10
+      RETURNING id, name, adm_no`,
+      [
+        name,
+        class_id,
+        gender,
+        date_of_birth || null,
+        parent_name,
+        parent_phone,
+        parent_email,
+        address,
+        county,
+        req.params.id
+      ]
     );
-    if (result.rows.length === 0) return res.status(404).json({ success: false, message: 'Student not found.' });
-    res.json({ success: true, message: 'Student updated.', data: result.rows[0] });
+
+    // CHECK IF STUDENT EXISTS
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found.'
+      });
+    }
+
+    // UPDATE HEALTH RECORDS
+    await query(
+      `UPDATE health_records SET
+        blood_group = COALESCE($1, blood_group),
+        allergies = COALESCE($2, allergies),
+        chronic_conditions = COALESCE($3, chronic_conditions),
+        current_medication = COALESCE($4, current_medication),
+        emergency_contact_phone = COALESCE($5, emergency_contact_phone)
+      WHERE student_id = $6`,
+      [
+        blood_group,
+        allergies,
+        chronic_conditions,
+        current_medication,
+        emergency_contact_phone,
+        req.params.id
+      ]
+    );
+
+    res.json({
+      success: true,
+      message: 'Student and health details updated successfully.',
+      data: result.rows[0]
+    });
+
   } catch (err) {
-    res.status(500).json({ success: false, message: 'Server error.' });
+
+    console.error('Update student error:', err);
+
+    res.status(500).json({
+      success: false,
+      message: 'Server error.'
+    });
+
   }
 });
 
