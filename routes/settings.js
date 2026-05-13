@@ -108,5 +108,37 @@ router.delete('/terms/:id', authorize('admin', 'principal'), async (req, res) =>
     res.status(500).json({ success: false, message: 'Server error.' });
   }
 });
+// GET school profile
+router.get('/profile', async (req, res) => {
+  try {
+    const result = await query('SELECT * FROM school_profile ORDER BY id LIMIT 1');
+    res.json({ success: true, data: result.rows[0] || {} });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+});
 
+// PUT save school profile
+router.put('/profile', authorize('admin', 'principal'), async (req, res) => {
+  try {
+    const { school_name, motto, address, phone, email, website, logo, principal_name, school_type, county, nemis_code, kra_pin } = req.body;
+    if (!school_name) return res.status(400).json({ success: false, message: 'School name is required.' });
+    const existing = await query('SELECT id FROM school_profile LIMIT 1');
+    let result;
+    if (existing.rows.length > 0) {
+      result = await query(
+        `UPDATE school_profile SET school_name=$1, motto=$2, address=$3, phone=$4, email=$5, website=$6, logo=COALESCE($7,logo), principal_name=$8, school_type=$9, county=$10, nemis_code=$11, kra_pin=$12, updated_at=CURRENT_TIMESTAMP WHERE id=$13 RETURNING *`,
+        [school_name, motto||null, address||null, phone||null, email||null, website||null, logo||null, principal_name||null, school_type||'Secondary', county||null, nemis_code||null, kra_pin||null, existing.rows[0].id]
+      );
+    } else {
+      result = await query(
+        `INSERT INTO school_profile (school_name,motto,address,phone,email,website,logo,principal_name,school_type,county,nemis_code,kra_pin) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+        [school_name, motto||null, address||null, phone||null, email||null, website||null, logo||null, principal_name||null, school_type||'Secondary', county||null, nemis_code||null, kra_pin||null]
+      );
+    }
+    res.json({ success: true, message: 'Profile saved.', data: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 module.exports = router;
